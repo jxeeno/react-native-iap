@@ -91,41 +91,45 @@ public class RNIapModule extends ReactContextBaseJavaModule implements Purchases
       return;
     }
 
-    final BillingClientStateListener billingClientStateListener = new BillingClientStateListener() {
-      private boolean bSetupCallbackConsumed = false;
+    try{
+      final BillingClientStateListener billingClientStateListener = new BillingClientStateListener() {
+        private boolean bSetupCallbackConsumed = false;
 
-      @Override
-      public void onBillingSetupFinished(BillingResult billingResult) {
-        if (!bSetupCallbackConsumed) {
-          bSetupCallbackConsumed = true;
-          if (billingResult.getResponseCode() == BillingClient.BillingResponseCode.OK ) {
-            if (billingClient != null && billingClient.isReady()) {
-              callback.run();
+        @Override
+        public void onBillingSetupFinished(BillingResult billingResult) {
+          if (!bSetupCallbackConsumed) {
+            bSetupCallbackConsumed = true;
+            if (billingResult.getResponseCode() == BillingClient.BillingResponseCode.OK ) {
+              if (billingClient != null && billingClient.isReady()) {
+                callback.run();
+              }
+            } else {
+              WritableMap error = Arguments.createMap();
+              error.putInt("responseCode", billingResult.getResponseCode());
+              error.putString("debugMessage", billingResult.getDebugMessage());
+              String[] errorData = DoobooUtils.getInstance().getBillingResponseData(billingResult.getResponseCode());
+              error.putString("code", errorData[0]);
+              error.putString("message", errorData[1]);
+              sendEvent(reactContext, "purchase-error", error);
+              DoobooUtils.getInstance().rejectPromiseWithBillingError(promise, billingResult.getResponseCode());
             }
-          } else {
-            WritableMap error = Arguments.createMap();
-            error.putInt("responseCode", billingResult.getResponseCode());
-            error.putString("debugMessage", billingResult.getDebugMessage());
-            String[] errorData = DoobooUtils.getInstance().getBillingResponseData(billingResult.getResponseCode());
-            error.putString("code", errorData[0]);
-            error.putString("message", errorData[1]);
-            sendEvent(reactContext, "purchase-error", error);
-            DoobooUtils.getInstance().rejectPromiseWithBillingError(promise, billingResult.getResponseCode());
           }
         }
-      }
 
-      @Override
-      public void onBillingServiceDisconnected() {
-        Log.d(TAG, "billing client disconnected");
-      }
-    };
+        @Override
+        public void onBillingServiceDisconnected() {
+          Log.d(TAG, "billing client disconnected");
+        }
+      };
 
-    try {
-      billingClient = BillingClient.newBuilder(reactContext).enablePendingPurchases().setListener(this).build();
-      billingClient.startConnection(billingClientStateListener);
-    } catch (Exception e) {
-      promise.reject(DoobooUtils.E_NOT_PREPARED, e.getMessage(), e);
+      try {
+        billingClient = BillingClient.newBuilder(reactContext).enablePendingPurchases().setListener(this).build();
+        billingClient.startConnection(billingClientStateListener);
+      } catch (Exception e) {
+        promise.reject(DoobooUtils.E_NOT_PREPARED, e.getMessage(), e);
+      }
+    }catch(Exception e){
+      promise.reject("ensureConnection", e.getMessage(), e);
     }
   }
 
@@ -332,36 +336,44 @@ public class RNIapModule extends ReactContextBaseJavaModule implements Purchases
     ensureConnection(promise, new Runnable() {
       @Override
       public void run() {
-        billingClient.queryPurchaseHistoryAsync(type.equals("subs") ? BillingClient.SkuType.SUBS : BillingClient.SkuType.INAPP, new PurchaseHistoryResponseListener() {
-          @Override
-          public void onPurchaseHistoryResponse(BillingResult billingResult, List<PurchaseHistoryRecord> purchaseHistoryRecordList) {
-            if (billingResult.getResponseCode() != BillingClient.BillingResponseCode.OK) {
-              DoobooUtils.getInstance().rejectPromiseWithBillingError(promise, billingResult.getResponseCode());
-              return;
-            }
+        try{
+          billingClient.queryPurchaseHistoryAsync(type.equals("subs") ? BillingClient.SkuType.SUBS : BillingClient.SkuType.INAPP, new PurchaseHistoryResponseListener() {
+            @Override
+            public void onPurchaseHistoryResponse(BillingResult billingResult, List<PurchaseHistoryRecord> purchaseHistoryRecordList) {
+              if (billingResult.getResponseCode() != BillingClient.BillingResponseCode.OK) {
+                DoobooUtils.getInstance().rejectPromiseWithBillingError(promise, billingResult.getResponseCode());
+                return;
+              }
 
-            Log.d(TAG, purchaseHistoryRecordList.toString());
-            WritableArray items = Arguments.createArray();
+              Log.d(TAG, purchaseHistoryRecordList.toString());
+              WritableArray items = Arguments.createArray();
 
-            for (PurchaseHistoryRecord purchase : purchaseHistoryRecordList) {
-              WritableMap item = Arguments.createMap();
-              item.putString("productId", purchase.getSku());
-              item.putString("transactionDate", String.valueOf(purchase.getPurchaseTime()));
-              item.putString("transactionReceipt", purchase.getOriginalJson());
-              item.putString("purchaseToken", purchase.getPurchaseToken());
-              item.putString("dataAndroid", purchase.getOriginalJson());
-              item.putString("signatureAndroid", purchase.getSignature());
-              item.putString("developerPayload", purchase.getDeveloperPayload());
-              items.pushMap(item);
-            }
+              for (PurchaseHistoryRecord purchase : purchaseHistoryRecordList) {
+                WritableMap item = Arguments.createMap();
+                item.putString("productId", purchase.getSku());
+                item.putString("transactionDate", String.valueOf(purchase.getPurchaseTime()));
+                item.putString("transactionReceipt", purchase.getOriginalJson());
+                item.putString("purchaseToken", purchase.getPurchaseToken());
+                item.putString("dataAndroid", purchase.getOriginalJson());
+                item.putString("signatureAndroid", purchase.getSignature());
+                item.putString("developerPayload", purchase.getDeveloperPayload());
+                items.pushMap(item);
+              }
 
-            try {
-              promise.resolve(items);
-            } catch (ObjectAlreadyConsumedException oce) {
-              Log.e(TAG, oce.getMessage());
+              try {
+                promise.resolve(items);
+              } catch (ObjectAlreadyConsumedException oce) {
+                Log.e(TAG, oce.getMessage());
+              } catch(Exception e){
+                promise.reject("getPurchaseHistoryByType", e.getMessage());
+                Log.e(TAG, e.getMessage());
+              }
             }
-          }
-        });
+          });
+        }catch(Exception e){
+          promise.reject("getPurchaseHistoryByType", e.getMessage());
+          Log.e(TAG, e.getMessage());
+        }
       }
     });
   }
@@ -525,22 +537,26 @@ public class RNIapModule extends ReactContextBaseJavaModule implements Purchases
   }
 
   private void sendUnconsumedPurchases(final Promise promise) {
-    ensureConnection(promise, new Runnable() {
-      @Override
-      public void run() {
-        Purchase.PurchasesResult purchasesResult = billingClient.queryPurchases(BillingClient.SkuType.INAPP);
-        ArrayList<Purchase> unacknowledgedPurchases = new ArrayList<>();
-        if (purchasesResult == null || purchasesResult.getPurchasesList() == null) {
-          return;
-        }
-        for (Purchase purchase : purchasesResult.getPurchasesList()) {
-          if (!purchase.isAcknowledged()) {
-            unacknowledgedPurchases.add(purchase);
+    try{
+      ensureConnection(promise, new Runnable() {
+        @Override
+        public void run() {
+          Purchase.PurchasesResult purchasesResult = billingClient.queryPurchases(BillingClient.SkuType.INAPP);
+          ArrayList<Purchase> unacknowledgedPurchases = new ArrayList<>();
+          if (purchasesResult == null || purchasesResult.getPurchasesList() == null) {
+            return;
           }
+          for (Purchase purchase : purchasesResult.getPurchasesList()) {
+            if (!purchase.isAcknowledged()) {
+              unacknowledgedPurchases.add(purchase);
+            }
+          }
+          onPurchasesUpdated(purchasesResult.getBillingResult(), unacknowledgedPurchases);
         }
-        onPurchasesUpdated(purchasesResult.getBillingResult(), unacknowledgedPurchases);
-      }
-    });
+      });
+    } catch(Exception e) {
+      promise.reject("sendUnconsumedPurchases", e.getMessage());
+    }
   }
 
   @ReactMethod
